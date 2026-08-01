@@ -5,7 +5,8 @@ import 'auth_service.dart';
 /// Change this to your deployed backend URL.
 /// Use 10.0.2.2 instead of localhost when running on the Android emulator.
 class ApiConfig {
-  static const String baseUrl = 'http://10.0.2.2:1000';
+  //static const String baseUrl = 'http://10.0.2.2:1000';
+  static const String baseUrl = 'https://workforge-contracter-mgmt-app.onrender.com';
 }
 
 class ApiException implements Exception {
