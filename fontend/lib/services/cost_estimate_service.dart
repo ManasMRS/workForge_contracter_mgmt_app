@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'cost_estimate_models.dart';
+import '../models/cost_estimate_models.dart';
 
 /// Talks to the FastAPI backend for house/road cost predictions.
 ///
