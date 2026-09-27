@@ -35,7 +35,7 @@ app.use(
 const logRequest = (req, res, next) => {
 
     console.log(
-        `[${new Date().toLocaleString()}] Request made to : ${req.originalUrl}`
+        `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
     );
 
     next();
@@ -50,24 +50,34 @@ app.use(logRequest);
 
 app.use(passport.initialize());
 
-const localAuthMiddleware =
-    passport.authenticate(
-        'local',
-        {
-            session: false
-        }
-    );
+
+// ============================================================
+// ROOT / HEALTH CHECK
+// ============================================================
+
+app.get('/', (req, res) => {
+
+    res.status(200).json({
+        success: true,
+        message: 'Welcome to Contractor Management App',
+        status: 'Server is running',
+        environment: process.env.NODE_ENV || 'development'
+    });
+
+});
 
 
 // ============================================================
-// ROOT ROUTE
+// HEALTH CHECK FOR RENDER
 // ============================================================
 
-app.get('/', function (req, res) {
+app.get('/health', (req, res) => {
 
-    res.send(
-        'Welcome to contractor mgmt app'
-    );
+    res.status(200).json({
+        success: true,
+        message: 'WorkForge backend is healthy',
+        timestamp: new Date().toISOString()
+    });
 
 });
 
@@ -144,15 +154,71 @@ app.use(
 
 
 // ============================================================
+// 404 HANDLER
+// ============================================================
+
+app.use((req, res) => {
+
+    res.status(404).json({
+        success: false,
+        message: 'Route not found',
+        path: req.originalUrl
+    });
+
+});
+
+
+// ============================================================
+// GLOBAL ERROR HANDLER
+// ============================================================
+
+app.use((err, req, res, next) => {
+
+    console.error('Server Error:', err);
+
+    res.status(err.status || 500).json({
+        success: false,
+        message: err.message || 'Internal Server Error'
+    });
+
+});
+
+
+// ============================================================
 // START SERVER
 // ============================================================
 
 app.listen(
     PORT,
+    '0.0.0.0',
     () => {
 
         console.log(
-            `Listening on port ${PORT}`
+            `========================================`
+        );
+
+        console.log(
+            `WorkForge Backend Started`
+        );
+
+        console.log(
+            `Port: ${PORT}`
+        );
+
+        console.log(
+            `Environment: ${process.env.NODE_ENV || 'development'}`
+        );
+
+        console.log(
+            `Health: http://localhost:${PORT}/health`
+        );
+
+        console.log(
+            `AI API: http://localhost:${PORT}/ai`
+        );
+
+        console.log(
+            `========================================`
         );
 
     }
