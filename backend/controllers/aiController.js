@@ -16,7 +16,7 @@ const predictSite = (req, res) => {
     }
 
     const pythonExecutable =
-        process.env.PYTHON_PATH || '/opt/anaconda3/bin/python';
+        process.env.PYTHON_PATH || 'python3';
 
     const predictorPath = path.join(
         __dirname,
