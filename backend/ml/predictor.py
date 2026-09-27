@@ -16,19 +16,22 @@ Expected trained model files:
     machine_count_model.joblib
 """
 
-
 # ============================================================
 # IMPORTS
 # ============================================================
 
 from pathlib import Path
+import json
+import sys
 
 import joblib
 import pandas as pd
+
 try:
     from .machine_type_lookup import recommended_machine_types
 except ImportError:
     from machine_type_lookup import recommended_machine_types
+
 
 # ============================================================
 # MODEL DIRECTORY
@@ -55,45 +58,54 @@ MACHINE_COUNT_MODEL_PATH = (
 
 
 # ============================================================
-# LOAD MODELS
+# LOAD MODEL
 # ============================================================
 
 def load_model(path):
     """
     Load a trained joblib model.
-
-    Parameters
-    ----------
-    path : Path
-        Path to the .joblib model.
-
-    Returns
-    -------
-    object
-        Loaded ML model.
     """
 
     if not path.exists():
-
         raise FileNotFoundError(
             f"ML model file not found: {path}"
         )
 
-    return joblib.load(path)
+    try:
+        return joblib.load(path)
+
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to load ML model '{path.name}': {e}"
+        ) from e
 
 
-# Load trained models
-total_cost_model = load_model(
-    TOTAL_COST_MODEL_PATH
-)
+# ============================================================
+# LOAD TRAINED MODELS
+# ============================================================
 
-duration_model = load_model(
-    DURATION_MODEL_PATH
-)
+try:
 
-machine_count_model = load_model(
-    MACHINE_COUNT_MODEL_PATH
-)
+    total_cost_model = load_model(
+        TOTAL_COST_MODEL_PATH
+    )
+
+    duration_model = load_model(
+        DURATION_MODEL_PATH
+    )
+
+    machine_count_model = load_model(
+        MACHINE_COUNT_MODEL_PATH
+    )
+
+except Exception as e:
+
+    print(
+        f"MODEL LOAD ERROR: {e}",
+        file=sys.stderr
+    )
+
+    raise
 
 
 # ============================================================
@@ -127,11 +139,14 @@ def predict_site(
         For roads:
             Length x Width area.
 
-        For bridges:
-            Length x effective width.
-
     floors : int
         Number of floors.
+
+        For Road:
+            floors can be 0.
+
+        For buildings:
+            floors must be >= 1.
 
     planned_workers : int
         Planned construction workforce.
@@ -152,13 +167,46 @@ def predict_site(
     """
 
     # ========================================================
-    # INPUT VALIDATION
+    # BASIC INPUT VALIDATION
     # ========================================================
+
+    if site_type is None:
+        raise ValueError(
+            "site_type is required."
+        )
+
+    site_type = str(site_type).strip()
 
     if not site_type:
         raise ValueError(
             "site_type is required."
         )
+
+
+    # ========================================================
+    # VALID SITE TYPES
+    # ========================================================
+
+    valid_site_types = [
+        "Home",
+        "Office",
+        "Road",
+        "Bridge",
+        "School",
+        "Hospital",
+        "Apartment",
+        "Other",
+    ]
+
+    if site_type not in valid_site_types:
+        raise ValueError(
+            f"Invalid site_type: {site_type}"
+        )
+
+
+    # ========================================================
+    # AREA VALIDATION
+    # ========================================================
 
     if scope_area_sqft is None:
         raise ValueError(
@@ -166,46 +214,70 @@ def predict_site(
         )
 
     try:
+
         scope_area_sqft = float(
             scope_area_sqft
         )
-    except (TypeError, ValueError):
+
+    except (TypeError, ValueError) as e:
 
         raise ValueError(
             "scope_area_sqft must be a number."
-        )
+        ) from e
+
 
     if scope_area_sqft <= 0:
-
         raise ValueError(
             "scope_area_sqft must be greater than 0."
         )
 
 
+    # ========================================================
+    # FLOORS VALIDATION
+    # ========================================================
+
     try:
+
         floors = int(floors)
-    except (TypeError, ValueError):
+
+    except (TypeError, ValueError) as e:
 
         raise ValueError(
             "floors must be an integer."
-        )
+        ) from e
 
-    if floors < 1:
 
-        raise ValueError(
-            "floors must be at least 1."
-        )
+    # Road does not use floors.
+    # Therefore 0 is valid for Road.
 
+    if site_type == "Road":
+
+        floors = 0
+
+    else:
+
+        if floors < 1:
+            raise ValueError(
+                "floors must be at least 1 for non-road projects."
+            )
+
+
+    # ========================================================
+    # WORKER VALIDATION
+    # ========================================================
 
     try:
+
         planned_workers = int(
             planned_workers
         )
-    except (TypeError, ValueError):
+
+    except (TypeError, ValueError) as e:
 
         raise ValueError(
             "planned_workers must be an integer."
-        )
+        ) from e
+
 
     if planned_workers < 1:
 
@@ -217,10 +289,6 @@ def predict_site(
     # ========================================================
     # NORMALIZE INPUTS
     # ========================================================
-
-    site_type = str(
-        site_type
-    ).strip()
 
     city_tier = str(
         city_tier
@@ -236,19 +304,8 @@ def predict_site(
 
 
     # ========================================================
-    # VALID VALUES
+    # VALID CITY TIERS
     # ========================================================
-
-    valid_site_types = [
-        "Home",
-        "Office",
-        "Road",
-        "Bridge",
-        "School",
-        "Hospital",
-        "Apartment",
-        "Other",
-    ]
 
     valid_city_tiers = [
         "tier1",
@@ -256,26 +313,22 @@ def predict_site(
         "tier3",
     ]
 
-    valid_quality_tiers = [
-        "basic",
-        "standard",
-        "premium",
-    ]
-
-
-    if site_type not in valid_site_types:
-
-        raise ValueError(
-            f"Invalid site_type: {site_type}"
-        )
-
-
     if city_tier not in valid_city_tiers:
 
         raise ValueError(
             f"Invalid city_tier: {city_tier}"
         )
 
+
+    # ========================================================
+    # VALID QUALITY TIERS
+    # ========================================================
+
+    valid_quality_tiers = [
+        "basic",
+        "standard",
+        "premium",
+    ]
 
     if quality_tier not in valid_quality_tiers:
 
@@ -289,6 +342,8 @@ def predict_site(
     # ========================================================
 
     if site_type == "Road":
+
+        road_quality = road_quality.lower()
 
         if road_quality not in [
             "pichu",
@@ -306,23 +361,25 @@ def predict_site(
     # CREATE MODEL INPUT DATAFRAME
     # ========================================================
 
-    input_data = pd.DataFrame([
-        {
-            "site_type": site_type,
+    input_data = pd.DataFrame(
+        [
+            {
+                "site_type": site_type,
 
-            "city_tier": city_tier,
+                "city_tier": city_tier,
 
-            "quality_tier": quality_tier,
+                "quality_tier": quality_tier,
 
-            "road_quality": road_quality,
+                "road_quality": road_quality,
 
-            "scope_area_sqft": scope_area_sqft,
+                "scope_area_sqft": scope_area_sqft,
 
-            "floors": floors,
+                "floors": floors,
 
-            "planned_workers": planned_workers,
-        }
-    ])
+                "planned_workers": planned_workers,
+            }
+        ]
+    )
 
 
     # ========================================================
@@ -350,36 +407,52 @@ def predict_site(
 
         raise RuntimeError(
             f"ML prediction failed: {e}"
-        )
+        ) from e
 
 
     # ========================================================
     # CLEAN PREDICTIONS
     # ========================================================
 
-    total_cost = max(
-        0,
-        float(total_cost)
-    )
+    try:
 
-    duration = max(
-        1,
-        float(duration)
-    )
+        total_cost = max(
+            0,
+            float(total_cost)
+        )
 
-    machine_count = max(
-        1,
-        float(machine_count)
-    )
+        duration = max(
+            1,
+            float(duration)
+        )
+
+        machine_count = max(
+            1,
+            float(machine_count)
+        )
+
+    except (TypeError, ValueError) as e:
+
+        raise RuntimeError(
+            f"Invalid ML prediction result: {e}"
+        ) from e
 
 
     # ========================================================
     # MACHINE TYPE RECOMMENDATION
     # ========================================================
 
-    machines = recommended_machine_types(
-        site_type
-    )
+    try:
+
+        machines = recommended_machine_types(
+            site_type
+        )
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Machine recommendation failed: {e}"
+        ) from e
 
 
     # ========================================================
@@ -406,135 +479,185 @@ def predict_site(
 
 
 # ============================================================
-# COMMAND LINE TEST
+# COMMAND LINE / NODE.JS API MODE
 # ============================================================
 
 if __name__ == "__main__":
-    import json
-    import sys
 
-    # ------------------------------------------------------------
+    # ========================================================
     # NODE.JS API MODE
-    # ------------------------------------------------------------
-    if len(sys.argv) > 1 and sys.argv[1] == "--stdin":
+    # ========================================================
+
+    if (
+        len(sys.argv) > 1
+        and sys.argv[1] == "--stdin"
+    ):
+
         try:
-            payload = json.load(sys.stdin)
+
+            payload = json.load(
+                sys.stdin
+            )
 
             result = predict_site(
-                site_type=payload.get("site_type"),
-                scope_area_sqft=payload.get("scope_area_sqft"),
-                floors=payload.get("floors", 1),
-                planned_workers=payload.get("planned_workers", 10),
-                city_tier=payload.get("city_tier", "tier2"),
-                quality_tier=payload.get("quality_tier", "standard"),
+
+                site_type=payload.get(
+                    "site_type"
+                ),
+
+                scope_area_sqft=payload.get(
+                    "scope_area_sqft"
+                ),
+
+                floors=payload.get(
+                    "floors",
+                    1
+                ),
+
+                planned_workers=payload.get(
+                    "planned_workers",
+                    10
+                ),
+
+                city_tier=payload.get(
+                    "city_tier",
+                    "tier2"
+                ),
+
+                quality_tier=payload.get(
+                    "quality_tier",
+                    "standard"
+                ),
+
                 road_quality=payload.get(
                     "road_quality",
                     "Not Applicable"
                 ),
             )
 
-            print(json.dumps(result))
+
+            # IMPORTANT:
+            # Only JSON goes to stdout.
+            print(
+                json.dumps(
+                    result
+                )
+            )
+
             sys.exit(0)
 
+
         except Exception as e:
+
+            # Return JSON error for Node.js
             print(
-                json.dumps({
-                    "error": str(e)
-                })
+                json.dumps(
+                    {
+                        "error": str(e)
+                    }
+                )
             )
+
             sys.exit(1)
 
-    # ------------------------------------------------------------
+
+    # ========================================================
     # DIRECT TERMINAL TEST MODE
-    # ------------------------------------------------------------
+    # ========================================================
 
     print("=" * 60)
     print("WorkForge ML Prediction Test")
     print("=" * 60)
 
-    apartment_result = predict_site(
-        site_type="Apartment",
-        scope_area_sqft=1800,
-        floors=4,
-        planned_workers=25,
-        city_tier="tier1",
-        quality_tier="standard",
-        road_quality="Not Applicable",
-    )
+
+    # ========================================================
+    # APARTMENT TEST
+    # ========================================================
 
     print("\nApartment Prediction")
     print("-" * 60)
-    print(apartment_result)
 
-    road_result = predict_site(
-        site_type="Road",
-        scope_area_sqft=500 * 20,
-        floors=1,
-        planned_workers=15,
-        city_tier="tier2",
-        quality_tier="standard",
-        road_quality="pichu",
-    )
+    try:
+
+        apartment_result = predict_site(
+
+            site_type="Apartment",
+
+            scope_area_sqft=1800,
+
+            floors=4,
+
+            planned_workers=25,
+
+            city_tier="tier1",
+
+            quality_tier="standard",
+
+            road_quality="Not Applicable",
+        )
+
+        print(
+            json.dumps(
+                apartment_result,
+                indent=4
+            )
+        )
+
+    except Exception as e:
+
+        print(
+            f"Apartment prediction failed: {e}"
+        )
+
+
+    # ========================================================
+    # ROAD TEST
+    # ========================================================
 
     print("\nRoad Prediction")
     print("-" * 60)
-    print(road_result)
+
+    try:
+
+        road_length = 500
+        road_width = 20
+
+        road_area = (
+            road_length * road_width
+        )
+
+        road_result = predict_site(
+
+            site_type="Road",
+
+            scope_area_sqft=road_area,
+
+            floors=0,
+
+            planned_workers=15,
+
+            city_tier="tier2",
+
+            quality_tier="standard",
+
+            road_quality="pichu",
+        )
+
+        print(
+            json.dumps(
+                road_result,
+                indent=4
+            )
+        )
+
+    except Exception as e:
+
+        print(
+            f"Road prediction failed: {e}"
+        )
+
 
     print()
     print("=" * 60)
-    print("WorkForge ML Prediction Test")
+    print("Prediction Test Completed")
     print("=" * 60)
-
-
-    # --------------------------------------------------------
-    # Apartment
-    # --------------------------------------------------------
-
-    print("\nApartment Prediction")
-    print("-" * 60)
-
-    apartment_result = predict_site(
-
-        site_type="Apartment",
-
-        scope_area_sqft=1800,
-
-        floors=4,
-
-        planned_workers=25,
-
-        city_tier="tier1",
-
-        quality_tier="standard",
-
-        road_quality="Not Applicable",
-    )
-
-    print(apartment_result)
-
-
-    # --------------------------------------------------------
-    # Road
-    # --------------------------------------------------------
-
-    print("\nRoad Prediction")
-    print("-" * 60)
-
-    road_result = predict_site(
-
-        site_type="Road",
-
-        scope_area_sqft=500 * 20,
-
-        floors=1,
-
-        planned_workers=15,
-
-        city_tier="tier2",
-
-        quality_tier="standard",
-
-        road_quality="pichu",
-    )
-
-    print(road_result)
