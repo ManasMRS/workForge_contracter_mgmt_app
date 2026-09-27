@@ -8,6 +8,10 @@ const predictSite = (req, res) => {
     console.log('Body:', req.body);
     console.log('========================================');
 
+    // =========================================================
+    // VALIDATE REQUEST
+    // =========================================================
+
     if (!req.body || typeof req.body !== 'object') {
         return res.status(400).json({
             success: false,
@@ -15,123 +19,299 @@ const predictSite = (req, res) => {
         });
     }
 
+    // =========================================================
+    // PYTHON CONFIGURATION
+    // =========================================================
+
     const pythonExecutable =
         process.env.PYTHON_PATH || 'python3';
 
-    const predictorPath = path.join(
+    const backendDirectory = path.join(
         __dirname,
-        '..',
+        '..'
+    );
+
+    const predictorPath = path.join(
+        backendDirectory,
         'ml',
         'predictor.py'
     );
 
-    console.log('Python:', pythonExecutable);
-    console.log('Predictor:', predictorPath);
+    console.log('Python executable:', pythonExecutable);
+    console.log('Python predictor:', predictorPath);
+    console.log('Working directory:', backendDirectory);
+
+    // =========================================================
+    // START PYTHON
+    // =========================================================
 
     const pythonProcess = spawn(
         pythonExecutable,
-        [predictorPath, '--stdin'],
+        [
+            predictorPath,
+            '--stdin'
+        ],
         {
-            cwd: path.join(__dirname, '..'),
-            stdio: ['pipe', 'pipe', 'pipe']
+            cwd: backendDirectory,
+
+            env: {
+                ...process.env,
+
+                // Prevent Python from buffering stdout.
+                PYTHONUNBUFFERED: '1'
+            },
+
+            stdio: [
+                'pipe',
+                'pipe',
+                'pipe'
+            ]
         }
     );
 
     let stdout = '';
     let stderr = '';
 
+    // =========================================================
+    // PYTHON STDOUT
+    // =========================================================
+
     pythonProcess.stdout.setEncoding('utf8');
+
+    pythonProcess.stdout.on(
+        'data',
+        (data) => {
+            stdout += data.toString();
+        }
+    );
+
+    // =========================================================
+    // PYTHON STDERR
+    // =========================================================
+
     pythonProcess.stderr.setEncoding('utf8');
 
-    pythonProcess.stdout.on('data', (data) => {
-        stdout += data;
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-        stderr += data;
-    });
-
-    pythonProcess.on('error', (error) => {
-        console.error('PYTHON PROCESS ERROR:', error);
-
-        if (!res.headersSent) {
-            return res.status(500).json({
-                success: false,
-                error: `Failed to start Python: ${error.message}`
-            });
+    pythonProcess.stderr.on(
+        'data',
+        (data) => {
+            stderr += data.toString();
         }
-    });
+    );
 
-    pythonProcess.on('close', (code) => {
-        console.log('Python exit code:', code);
+    // =========================================================
+    // PYTHON START ERROR
+    // =========================================================
 
-        if (stderr) {
-            console.log('Python stderr:');
-            console.log(stderr);
-        }
+    pythonProcess.on(
+        'error',
+        (error) => {
 
-        console.log('Python stdout:');
-        console.log(stdout);
+            console.error(
+                'PYTHON PROCESS START ERROR:',
+                error
+            );
 
-        if (code !== 0) {
-            return res.status(500).json({
-                success: false,
-                error: stderr || `Python exited with code ${code}`
-            });
-        }
+            if (!res.headersSent) {
 
-        const cleanOutput = stdout.trim();
-
-        if (!cleanOutput) {
-            return res.status(500).json({
-                success: false,
-                error: 'Python returned empty output.'
-            });
-        }
-
-        try {
-            const result = JSON.parse(cleanOutput);
-
-            if (result.error) {
                 return res.status(500).json({
                     success: false,
-                    error: result.error
+                    error:
+                        `Failed to start Python: ${error.message}`
+                });
+            }
+        }
+    );
+
+    // =========================================================
+    // PYTHON PROCESS CLOSED
+    // =========================================================
+
+    pythonProcess.on(
+        'close',
+        (code, signal) => {
+
+            console.log(
+                'Python exit code:',
+                code
+            );
+
+            console.log(
+                'Python signal:',
+                signal
+            );
+
+            console.log(
+                'Python stdout:',
+                stdout
+            );
+
+            if (stderr.trim()) {
+
+                console.log(
+                    'Python stderr:',
+                    stderr
+                );
+            }
+
+            // =====================================================
+            // PYTHON FAILED
+            // =====================================================
+
+            if (code !== 0) {
+
+                let errorMessage =
+                    stderr.trim();
+
+                if (!errorMessage) {
+
+                    errorMessage =
+                        `Python exited with code ${code}`;
+                }
+
+                return res.status(500).json({
+                    success: false,
+                    error: errorMessage,
+
+                    python_exit_code: code,
+
+                    python_signal: signal,
+
+                    stdout: stdout.trim()
                 });
             }
 
+            // =====================================================
+            // EMPTY OUTPUT
+            // =====================================================
+
+            const cleanOutput =
+                stdout.trim();
+
+            if (!cleanOutput) {
+
+                return res.status(500).json({
+                    success: false,
+                    error:
+                        'Python returned empty output.',
+
+                    python_stderr:
+                        stderr.trim()
+                });
+            }
+
+            // =====================================================
+            // PARSE JSON
+            // =====================================================
+
+            let result;
+
+            try {
+
+                result =
+                    JSON.parse(cleanOutput);
+
+            } catch (error) {
+
+                console.error(
+                    'Python JSON parsing error:',
+                    error
+                );
+
+                return res.status(500).json({
+                    success: false,
+
+                    error:
+                        'Python returned invalid JSON.',
+
+                    raw_output:
+                        cleanOutput,
+
+                    python_stderr:
+                        stderr.trim()
+                });
+            }
+
+            // =====================================================
+            // PYTHON RETURNED APPLICATION ERROR
+            // =====================================================
+
+            if (
+                result &&
+                result.error
+            ) {
+
+                return res.status(500).json({
+                    success: false,
+
+                    error:
+                        result.error,
+
+                    python_stderr:
+                        stderr.trim()
+                });
+            }
+
+            // =====================================================
+            // SUCCESS
+            // =====================================================
+
             return res.status(200).json({
+
                 success: true,
-                prediction: result
-            });
 
-        } catch (error) {
-            console.error('JSON parsing error:', error);
+                prediction: result,
 
-            return res.status(500).json({
-                success: false,
-                error: 'Python returned invalid JSON.',
-                raw_output: cleanOutput
+                // stderr can contain warnings.
+                // It is NOT treated as an error when
+                // Python exits successfully.
+                warning:
+                    stderr.trim() || null
             });
         }
-    });
+    );
 
-    const input = JSON.stringify(req.body);
+    // =========================================================
+    // SEND REQUEST DATA TO PYTHON
+    // =========================================================
 
-    console.log('Sending to Python:');
+    const input =
+        JSON.stringify(req.body);
+
+    console.log(
+        'Sending JSON to Python:'
+    );
+
     console.log(input);
 
+    // =========================================================
+    // CHECK STDIN
+    // =========================================================
+
     if (!pythonProcess.stdin) {
-        console.error('Python stdin is undefined.');
+
+        console.error(
+            'Python stdin is undefined.'
+        );
 
         return res.status(500).json({
             success: false,
-            error: 'Python stdin pipe was not created.'
+            error:
+                'Python stdin pipe was not created.'
         });
     }
 
-    pythonProcess.stdin.write(input, 'utf8');
+    // =========================================================
+    // SEND JSON
+    // =========================================================
+
+    pythonProcess.stdin.write(
+        input,
+        'utf8'
+    );
+
     pythonProcess.stdin.end();
 };
+
 
 module.exports = {
     predictSite
